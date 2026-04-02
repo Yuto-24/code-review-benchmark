@@ -19,9 +19,19 @@ from collections import Counter, defaultdict
 
 from config import DBConfig
 from db.connection import DBAdapter
-from pipeline.quality import is_bot_username
 
 COMMENT_EVENT_TYPES = frozenset({"review", "review_comment", "issue_comment"})
+
+_KNOWN_BOTS = frozenset({
+    "dependabot", "renovate", "github-actions", "codecov",
+    "mergify", "snyk-bot", "greenkeeper", "imgbot",
+    "stale", "allcontributors", "semantic-release-bot",
+})
+
+
+def is_bot_username(username: str) -> bool:
+    lower = username.lower()
+    return lower.endswith("[bot]") or lower in _KNOWN_BOTS
 
 
 def _normalize(text: str) -> str:
