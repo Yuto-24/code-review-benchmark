@@ -90,7 +90,13 @@ async def run(args: argparse.Namespace) -> None:
         min_prs = args.min_prs
         limit = args.limit
 
-        print(f"Finding (repo_name, pr_author) pairs with >= {min_prs} analyzed PRs...\n")
+        bot_filter = args.bot
+        bot_label = f" for bot={bot_filter}" if bot_filter else ""
+        print(f"Finding (repo_name, pr_author) pairs with >= {min_prs} analyzed PRs{bot_label}...\n")
+
+        bot_clause = ""
+        if bot_filter:
+            bot_clause = f"AND c.github_username = '{bot_filter}'"
 
         pairs = await db.fetchall(f"""
             SELECT p.repo_name, p.pr_author, c.github_username AS chatbot,
@@ -102,6 +108,7 @@ async def run(args: argparse.Namespace) -> None:
               AND p.pr_author IS NOT NULL
               AND p.pr_author != ''
               AND p.pr_merged = TRUE
+              {bot_clause}
             GROUP BY p.repo_name, p.pr_author, c.github_username
             HAVING COUNT(*) >= {min_prs}
             ORDER BY COUNT(*) DESC
@@ -261,6 +268,8 @@ def main() -> None:
                         help="Minimum PRs per (repo, author, bot) triple (default: 20)")
     parser.add_argument("--limit", type=int, default=50,
                         help="Max pairs to analyze (default: 50)")
+    parser.add_argument("--bot", type=str, default=None,
+                        help="Filter to a specific bot username (e.g. 'coderabbitai[bot]')")
     parser.add_argument("--show-comments", action="store_true",
                         help="Show top repeated comments for each pair")
     args = parser.parse_args()
