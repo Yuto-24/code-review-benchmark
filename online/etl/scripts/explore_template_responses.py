@@ -98,6 +98,10 @@ async def run(args: argparse.Namespace) -> None:
         if bot_filter:
             bot_clause = f"AND c.github_username = '{bot_filter}'"
 
+        merged_clause = "AND p.pr_merged = TRUE"
+        if args.include_unmerged:
+            merged_clause = ""
+
         pairs = await db.fetchall(f"""
             SELECT p.repo_name, p.pr_author, c.github_username AS chatbot,
                    COUNT(*) AS pr_count
@@ -107,7 +111,7 @@ async def run(args: argparse.Namespace) -> None:
               AND p.assembled IS NOT NULL
               AND p.pr_author IS NOT NULL
               AND p.pr_author != ''
-              AND p.pr_merged = TRUE
+              {merged_clause}
               {bot_clause}
             GROUP BY p.repo_name, p.pr_author, c.github_username
             HAVING COUNT(*) >= {min_prs}
@@ -137,8 +141,9 @@ async def run(args: argparse.Namespace) -> None:
             pr_count = pair["pr_count"]
 
             # Fetch assembled timelines for this pair
+            merged_clause2 = "AND p.pr_merged = TRUE" if not args.include_unmerged else ""
             rows = await db.fetchall(*db._translate_params(
-                """
+                f"""
                 SELECT p.assembled
                 FROM prs p
                 JOIN chatbots c ON c.id = p.chatbot_id
@@ -147,7 +152,7 @@ async def run(args: argparse.Namespace) -> None:
                   AND c.github_username = $3
                   AND p.status = 'analyzed'
                   AND p.assembled IS NOT NULL
-                  AND p.pr_merged = TRUE
+                  {merged_clause2}
                 ORDER BY p.id
                 LIMIT 200
                 """,
@@ -270,6 +275,8 @@ def main() -> None:
                         help="Max pairs to analyze (default: 50)")
     parser.add_argument("--bot", type=str, default=None,
                         help="Filter to a specific bot username (e.g. 'coderabbitai[bot]')")
+    parser.add_argument("--include-unmerged", action="store_true",
+                        help="Include PRs regardless of merge status (default: merged only)")
     parser.add_argument("--show-comments", action="store_true",
                         help="Show top repeated comments for each pair")
     args = parser.parse_args()
