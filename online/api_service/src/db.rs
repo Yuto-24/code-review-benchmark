@@ -91,18 +91,42 @@ struct VolumeRawRow {
     display_name: Option<String>,
 }
 
-fn is_bot_username(username: &str) -> bool {
+const GENERAL_BOT_NAMES: &[&str] = &[
+    "dependabot", "renovate", "github-actions", "codecov",
+    "mergify", "snyk-bot", "greenkeeper", "imgbot",
+    "stale", "allcontributors", "semantic-release-bot",
+    "github-advanced-security",
+];
+
+fn is_bot_username(username: &str, known_bots: &HashSet<String>) -> bool {
     let lower = username.to_lowercase();
-    lower.ends_with("[bot]")
-        || matches!(
-            lower.as_str(),
-            "dependabot" | "renovate" | "github-actions" | "codecov"
-            | "mergify" | "snyk-bot" | "greenkeeper" | "imgbot"
-            | "stale" | "allcontributors" | "semantic-release-bot"
-        )
+    lower.ends_with("[bot]") || known_bots.contains(&lower)
+}
+
+/// Build set of known bot usernames from chatbot table + general bots.
+/// Includes both "name[bot]" and "name" variants since BQ actors may lack the suffix.
+fn build_known_bots(chatbot_usernames: &[String]) -> HashSet<String> {
+    let mut bots = HashSet::new();
+    for name in GENERAL_BOT_NAMES {
+        bots.insert(name.to_string());
+    }
+    for name in chatbot_usernames {
+        let lower = name.to_lowercase();
+        bots.insert(lower.trim_end_matches("[bot]").to_string());
+        bots.insert(lower);
+    }
+    bots
 }
 
 fn build_snapshot(rows: Vec<RawRow>, volume_rows: Vec<VolumeRawRow>, ignored_usernames: &HashSet<String>) -> anyhow::Result<Snapshot> {
+    // Collect all chatbot usernames first to build comprehensive bot detection set
+    let chatbot_usernames: Vec<String> = rows.iter()
+        .map(|r| r.github_username.clone())
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    let known_bots = build_known_bots(&chatbot_usernames);
+
     let mut chatbot_map: HashMap<i32, u8> = HashMap::new();
     let mut chatbots: Vec<ChatbotInfo> = Vec::new();
     let mut language_map: HashMap<String, u16> = HashMap::new();
@@ -119,7 +143,7 @@ fn build_snapshot(rows: Vec<RawRow>, volume_rows: Vec<VolumeRawRow>, ignored_use
     // (repo_name_idx, author_idx, chatbot_idx) -> count
     let mut author_repo_counts: HashMap<(u32, u32, u8), u32> = HashMap::new();
 
-    for row in rows {
+    for row in &rows {
         // Chatbot lookup
         let chatbot_idx = *chatbot_map.entry(row.chatbot_id).or_insert_with(|| {
             let idx = chatbots.len() as u8;
@@ -152,7 +176,7 @@ fn build_snapshot(rows: Vec<RawRow>, volume_rows: Vec<VolumeRawRow>, ignored_use
             .unwrap_or(false);
 
         let pr_author_is_bot = row.pr_author.as_ref()
-            .map(|a| is_bot_username(a))
+            .map(|a| is_bot_username(a, &known_bots))
             .unwrap_or(false);
 
         // Author dedup + aggregate accumulators
