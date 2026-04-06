@@ -76,7 +76,7 @@ def _top_n(rows: list[dict[str, Any]], n: int = 20) -> list[dict[str, Any]]:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Compare leaderboard rankings across filters")
     parser.add_argument("--api-url", default="http://localhost:3000")
-    parser.add_argument("--top", type=int, default=15, help="Show top N bots")
+    parser.add_argument("--top", type=int, default=25, help="Show top N bots")
     parser.add_argument("--output", help="Write JSON results to file")
     args = parser.parse_args()
 
