@@ -15,25 +15,31 @@ import sys
 import urllib.request
 from typing import Any
 
+_BASE = {"include_ignored": "true"}
+
 FILTER_CONFIGS: list[tuple[str, dict[str, str]]] = [
-    ("baseline", {}),
-    ("no_bot_author", {"exclude_bot_authored": "true"}),
+    ("baseline", {**_BASE}),
+    ("no_bot_author", {**_BASE, "exclude_bot_authored": "true"}),
     ("no_self_deal", {
+        **_BASE,
         "exclude_bot_authored": "true",
         "exclude_self_authored": "true",
     }),
     ("engaged", {
+        **_BASE,
         "exclude_bot_authored": "true",
         "exclude_self_authored": "true",
         "require_human_engagement": "true",
     }),
     ("capped", {
+        **_BASE,
         "exclude_bot_authored": "true",
         "exclude_self_authored": "true",
         "require_human_engagement": "true",
         "max_author_repo_prs": "50",
     }),
     ("silver", {
+        **_BASE,
         "exclude_bot_authored": "true",
         "exclude_self_authored": "true",
         "require_human_engagement": "true",
@@ -41,6 +47,7 @@ FILTER_CONFIGS: list[tuple[str, dict[str, str]]] = [
         "min_repo_contributors": "2",
     }),
     ("gold", {
+        **_BASE,
         "exclude_bot_authored": "true",
         "exclude_self_authored": "true",
         "require_human_engagement": "true",
@@ -53,7 +60,7 @@ FILTER_CONFIGS: list[tuple[str, dict[str, str]]] = [
 
 def _fetch_leaderboard(api_url: str, params: dict[str, str]) -> list[dict[str, Any]]:
     qs = "&".join(f"{k}={v}" for k, v in params.items())
-    url = f"{api_url}/leaderboard" + (f"?{qs}" if qs else "")
+    url = f"{api_url}/api/leaderboard" + (f"?{qs}" if qs else "")
     with urllib.request.urlopen(url, timeout=30) as resp:
         data = json.loads(resp.read())
     return data["rows"]
