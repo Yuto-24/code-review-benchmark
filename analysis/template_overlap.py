@@ -12,7 +12,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-from collections import Counter, defaultdict
+from collections import defaultdict
 from typing import Any
 
 
@@ -26,7 +26,6 @@ async def main() -> None:
 
     from config import DBConfig
     from db.connection import DBAdapter
-    from pipeline.quality import is_bot_username
 
     db = DBAdapter(DBConfig().database_url)
     await db.connect()
@@ -78,11 +77,11 @@ async def main() -> None:
     flag_types = ["scripted", "template_prefix", "no_human_comments",
                   "low_diversity", "user_template", "user_scripted", "mostly_short"]
 
-    # Group flagged pairs by flag
+    # Group flagged pairs by flag type (flags are dicts with a "type" key)
     pairs_by_flag: dict[str, list[dict]] = defaultdict(list)
     for pair in flagged_pairs:
         for flag in pair.get("flags", []):
-            pairs_by_flag[flag].append(pair)
+            pairs_by_flag[flag["type"]].append(pair)
 
     print(f"\n{'='*100}")
     print(f"  TEMPLATE FLAG OVERLAP WITH QUALITY FILTERS")
@@ -116,7 +115,7 @@ async def main() -> None:
                 lt3 += 1
 
             # Check if most PRs in this pair are bot-authored
-            stats = pair_stats.get((repo, p.get("bot", "")), {})
+            stats = pair_stats.get((repo, p.get("chatbot", "")), {})
             if stats.get("human_authored", 0) == 0:
                 bot_auth += 1
 
@@ -125,7 +124,7 @@ async def main() -> None:
         caught = sum(
             1 for p in pairs
             if repo_contribs.get(p.get("repo", ""), 1) < 2
-            or pair_stats.get((p.get("repo", ""), p.get("bot", "")), {}).get("human_authored", 0) == 0
+            or pair_stats.get((p.get("repo", ""), p.get("chatbot", "")), {}).get("human_authored", 0) == 0
         )
 
         print(
@@ -142,7 +141,7 @@ async def main() -> None:
     uncaught: list[dict] = []
     for pair in flagged_pairs:
         repo = pair.get("repo", "")
-        bot = pair.get("bot", "")
+        bot = pair.get("chatbot", "")
         contribs = repo_contribs.get(repo, 1)
         stats = pair_stats.get((repo, bot), {})
         human_authored = stats.get("human_authored", 0)
@@ -159,9 +158,10 @@ async def main() -> None:
         print(f"  {'-'*45} {'-'*30} {'-'*30} {'-'*8} {'-'*6}")
         uncaught.sort(key=lambda x: x.get("pr_count", 0), reverse=True)
         for p in uncaught[:30]:
-            flags_str = ", ".join(p.get("flags", []))[:29]
+            flag_names = [f["type"] for f in p.get("flags", [])]
+            flags_str = ", ".join(flag_names)[:29]
             print(
-                f"  {p.get('repo', '')[:44]:<45} {p.get('bot', '')[:29]:<30} "
+                f"  {p.get('repo', '')[:44]:<45} {p.get('chatbot', '')[:29]:<30} "
                 f"{flags_str:<30} {p.get('_contribs', 0):>8} {p.get('pr_count', 0):>6}"
             )
 
