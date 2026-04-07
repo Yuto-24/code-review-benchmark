@@ -4,6 +4,9 @@ mod tests {
     use crate::model::*;
     use chrono::{NaiveDate, TimeZone, Utc};
     use std::collections::{BTreeMap, HashMap};
+    use std::sync::atomic::{AtomicI64, Ordering};
+
+    static NEXT_PR_ID: AtomicI64 = AtomicI64::new(1);
 
     /// Helper: build a minimal snapshot with given chatbots and languages.
     fn make_snapshot(
@@ -39,7 +42,7 @@ mod tests {
             languages: lang_strs,
             volumes: BTreeMap::new(),
             repo_contributor_counts: HashMap::new(),
-            author_repo_counts: HashMap::new(),
+            author_repo_prs: HashMap::new(),
         }
     }
 
@@ -53,6 +56,7 @@ mod tests {
 
     fn rec(chatbot_idx: u8, reviewed: Option<chrono::DateTime<Utc>>, p: Option<f32>, r: Option<f32>) -> PrRecord {
         PrRecord {
+            pr_id: NEXT_PR_ID.fetch_add(1, Ordering::Relaxed),
             chatbot_idx,
             bot_reviewed_at: reviewed,
             precision: p,
@@ -436,7 +440,7 @@ mod tests {
         chatbots: Vec<(&str, &str)>,
         records: Vec<(NaiveDate, PrRecord)>,
         repo_contributor_counts: HashMap<u32, u32>,
-        author_repo_counts: HashMap<(u32, u32, u8), u32>,
+        author_repo_prs: HashMap<(u32, u32, u8), Vec<i64>>,
     ) -> Snapshot {
         let chatbot_infos: Vec<ChatbotInfo> = chatbots
             .into_iter()
@@ -459,7 +463,7 @@ mod tests {
             languages: Vec::new(),
             volumes: BTreeMap::new(),
             repo_contributor_counts,
-            author_repo_counts,
+            author_repo_prs,
         }
     }
 
@@ -539,48 +543,74 @@ mod tests {
     }
 
     #[test]
-    fn test_max_author_repo_prs() {
-        // author 0 in repo 0 has 100 PRs, author 1 in repo 0 has 5 PRs
-        let mut r_concentrated = rec(0, dt(2026, 2, 1), Some(0.5), Some(0.5));
-        r_concentrated.repo_name_idx = 0;
-        r_concentrated.author_idx = 0;
+    fn test_max_author_repo_prs_samples_n() {
+        // Create 10 records for author 0 in repo 0, cap at 5 → exactly 5 sampled
+        let mut records = Vec::new();
+        let mut pr_ids = Vec::new();
+        for _ in 0..10 {
+            let mut r = rec(0, dt(2026, 2, 1), Some(0.5), Some(0.5));
+            r.repo_name_idx = 0;
+            r.author_idx = 0;
+            pr_ids.push(r.pr_id);
+            records.push((date(2026, 2, 1), r));
+        }
 
-        let mut r_normal = rec(0, dt(2026, 2, 1), Some(0.7), Some(0.7));
-        r_normal.repo_name_idx = 0;
-        r_normal.author_idx = 1;
-
-        let mut author_counts = HashMap::new();
-        author_counts.insert((0u32, 0u32, 0u8), 100u32);
-        author_counts.insert((0u32, 1u32, 0u8), 5u32);
+        let mut author_repo_prs = HashMap::new();
+        author_repo_prs.insert((0u32, 0u32, 0u8), pr_ids);
 
         let snap = make_quality_snapshot(
             vec![("bot1", "Bot One")],
-            vec![
-                (date(2026, 2, 1), r_concentrated),
-                (date(2026, 2, 1), r_normal),
-            ],
+            records,
             HashMap::new(),
-            author_counts,
+            author_repo_prs,
         );
 
-        // No filter: both included
-        assert_eq!(apply_filters(&snap, &FilterParams::default()).records.len(), 2);
+        // No filter: all 10 included
+        assert_eq!(apply_filters(&snap, &FilterParams::default()).records.len(), 10);
 
-        // max_author_repo_prs=50: concentrated author excluded
+        // max_author_repo_prs=5: exactly 5 randomly sampled
         let params = FilterParams {
-            max_author_repo_prs: Some(50),
+            max_author_repo_prs: Some(5),
             ..Default::default()
         };
-        let result = apply_filters(&snap, &params);
-        assert_eq!(result.records.len(), 1);
-        assert_eq!(result.records[0].1.author_idx, 1);
+        assert_eq!(apply_filters(&snap, &params).records.len(), 5);
 
-        // max_author_repo_prs=200: both pass
+        // max_author_repo_prs=20: all 10 pass (under cap)
         let params_high = FilterParams {
-            max_author_repo_prs: Some(200),
+            max_author_repo_prs: Some(20),
             ..Default::default()
         };
-        assert_eq!(apply_filters(&snap, &params_high).records.len(), 2);
+        assert_eq!(apply_filters(&snap, &params_high).records.len(), 10);
+    }
+
+    #[test]
+    fn test_max_author_repo_prs_under_cap_passes_all() {
+        // 3 records, cap at 5 → all pass
+        let mut records = Vec::new();
+        let mut pr_ids = Vec::new();
+        for _ in 0..3 {
+            let mut r = rec(0, dt(2026, 2, 1), Some(0.7), Some(0.7));
+            r.repo_name_idx = 0;
+            r.author_idx = 1;
+            pr_ids.push(r.pr_id);
+            records.push((date(2026, 2, 1), r));
+        }
+
+        let mut author_repo_prs = HashMap::new();
+        author_repo_prs.insert((0u32, 1u32, 0u8), pr_ids);
+
+        let snap = make_quality_snapshot(
+            vec![("bot1", "Bot One")],
+            records,
+            HashMap::new(),
+            author_repo_prs,
+        );
+
+        let params = FilterParams {
+            max_author_repo_prs: Some(5),
+            ..Default::default()
+        };
+        assert_eq!(apply_filters(&snap, &params).records.len(), 3);
     }
 
     #[test]
@@ -600,7 +630,7 @@ mod tests {
             max_author_repo_prs: Some(10),
             ..Default::default()
         };
-        // Unknown author should pass (not in map, so not filtered)
+        // Unknown author should pass (not in sampled set check is skipped)
         assert_eq!(apply_filters(&snap, &params).records.len(), 1);
     }
 
@@ -613,7 +643,7 @@ mod tests {
         r1.author_idx = 0;
 
         let mut r2_bot = rec(0, dt(2026, 2, 1), Some(0.6), Some(0.6));
-        r2_bot.pr_author_is_bot = true; // will be excluded by exclude_bot_authored
+        r2_bot.pr_author_is_bot = true;
         r2_bot.repo_name_idx = 0;
         r2_bot.author_idx = 1;
 
@@ -625,17 +655,32 @@ mod tests {
         let mut r4_concentrated = rec(0, dt(2026, 2, 1), Some(0.8), Some(0.8));
         r4_concentrated.pr_author_is_bot = false;
         r4_concentrated.repo_name_idx = 0;
-        r4_concentrated.author_idx = 3; // 200 PRs
+        r4_concentrated.author_idx = 3;
+
+        // Build author_repo_prs: author 3 has 200 pr_ids (only 1 record in snapshot, but
+        // 200 entries in the map so the triple exceeds cap=50 and this record's pr_id
+        // has only a 50/200 = 25% chance of being sampled — we include 200 dummy IDs
+        // plus the real record's ID is NOT guaranteed to be sampled, so we create a
+        // separate set where the record's pr_id is absent to ensure deterministic test).
+        let r4_id = r4_concentrated.pr_id;
+        let mut author_repo_prs = HashMap::new();
+        // r1's triple: 10 PRs (under cap of 50)
+        let mut r1_prs = vec![r1.pr_id];
+        r1_prs.extend(10_000..10_009); // 9 dummy IDs
+        author_repo_prs.insert((0u32, 0u32, 0u8), r1_prs);
+        // r2's triple: 5 PRs
+        author_repo_prs.insert((0u32, 1u32, 0u8), vec![r2_bot.pr_id, 20_000, 20_001, 20_002, 20_003]);
+        // r3's triple: 3 PRs
+        author_repo_prs.insert((1u32, 2u32, 0u8), vec![r3_solo.pr_id, 30_000, 30_001]);
+        // r4's triple: 200 dummy IDs that do NOT include r4_id → r4 will never be sampled
+        let concentrated_prs: Vec<i64> = (40_000..40_200).collect();
+        author_repo_prs.insert((0u32, 3u32, 0u8), concentrated_prs);
+        // Verify the real pr_id is excluded from the map
+        assert!(!author_repo_prs[&(0u32, 3u32, 0u8)].contains(&r4_id));
 
         let mut repo_counts = HashMap::new();
         repo_counts.insert(0u32, 5u32);
         repo_counts.insert(1u32, 1u32); // solo
-
-        let mut author_counts = HashMap::new();
-        author_counts.insert((0u32, 0u32, 0u8), 10u32);
-        author_counts.insert((0u32, 1u32, 0u8), 5u32);
-        author_counts.insert((1u32, 2u32, 0u8), 3u32);
-        author_counts.insert((0u32, 3u32, 0u8), 200u32);
 
         let snap = make_quality_snapshot(
             vec![("bot1", "Bot One")],
@@ -646,7 +691,7 @@ mod tests {
                 (date(2026, 2, 1), r4_concentrated),
             ],
             repo_counts,
-            author_counts,
+            author_repo_prs,
         );
 
         let params = FilterParams {
@@ -656,10 +701,10 @@ mod tests {
             ..Default::default()
         };
         let result = apply_filters(&snap, &params);
-        // r1: human, diverse repo, 10 PRs → passes
-        // r2: bot-authored → excluded
-        // r3: solo repo → excluded
-        // r4: 200 PRs concentration → excluded
+        // r1: human, diverse repo, 10 PRs (under cap) → passes
+        // r2: bot-authored → excluded by exclude_bot_authored
+        // r3: solo repo → excluded by min_repo_contributors
+        // r4: 200 PRs and r4's pr_id not in the sampled set → excluded
         assert_eq!(result.records.len(), 1);
         assert_eq!(result.records[0].1.author_idx, 0);
     }

@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
 use chrono::NaiveDate;
+use rand::seq::SliceRandom;
+use rand::thread_rng;
 
 use crate::model::*;
 
@@ -135,18 +137,8 @@ fn record_matches(record: &PrRecord, snapshot: &Snapshot, params: &FilterParams)
         }
     }
 
-    // Cap on PRs per (repo, author, bot) triple
-    if let Some(max_prs) = params.max_author_repo_prs {
-        if record.author_idx != u32::MAX {
-            let count = snapshot.author_repo_counts
-                .get(&(record.repo_name_idx, record.author_idx, record.chatbot_idx))
-                .copied()
-                .unwrap_or(0);
-            if count > max_prs {
-                return false;
-            }
-        }
-    }
+    // NOTE: max_author_repo_prs is handled in apply_filters via random sampling,
+    // not here, because it requires a pre-computed sampled set across all records.
 
     // Engagement filters
     if params.require_human_engagement && !record.has_human_engagement {
@@ -212,7 +204,25 @@ pub fn apply_filters<'a>(snapshot: &'a Snapshot, params: &FilterParams) -> Filte
         })
         .collect();
 
-    // 3. Collect records passing all filters
+    // 3. Pre-compute random sample for max_author_repo_prs cap.
+    //    For triples exceeding the cap, randomly pick `max` pr_ids to keep;
+    //    triples at or below the cap pass through entirely.
+    let capped_sample: Option<HashSet<i64>> = params.max_author_repo_prs.map(|max_prs| {
+        let mut rng = thread_rng();
+        let mut sampled = HashSet::new();
+        for (_, prs) in &snapshot.author_repo_prs {
+            if prs.len() as u32 > max_prs {
+                let mut shuffled = prs.clone();
+                shuffled.shuffle(&mut rng);
+                sampled.extend(shuffled.into_iter().take(max_prs as usize));
+            } else {
+                sampled.extend(prs.iter().copied());
+            }
+        }
+        sampled
+    });
+
+    // 4. Collect records passing all filters
     let mut records = Vec::new();
 
     let iter: Box<dyn Iterator<Item = (&NaiveDate, &Vec<PrRecord>)>> =
@@ -230,6 +240,11 @@ pub fn apply_filters<'a>(snapshot: &'a Snapshot, params: &FilterParams) -> Filte
             }
             if !record_matches(r, snapshot, params) {
                 continue;
+            }
+            if let Some(ref sampled) = capped_sample {
+                if r.author_idx != u32::MAX && !sampled.contains(&r.pr_id) {
+                    continue;
+                }
             }
             records.push((*date, r));
         }

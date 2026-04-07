@@ -15,7 +15,8 @@ pub async fn load_from_postgres(database_url: &str) -> anyhow::Result<Snapshot> 
 
     let rows = sqlx::query_as::<_, RawRow>(
         r#"
-        SELECT la.chatbot_id,
+        SELECT p.id as pr_id,
+               la.chatbot_id,
                la.precision,
                la.recall,
                p.bot_reviewed_at,
@@ -70,6 +71,7 @@ pub async fn load_from_postgres(database_url: &str) -> anyhow::Result<Snapshot> 
 
 #[derive(sqlx::FromRow)]
 struct RawRow {
+    pr_id: i64,
     chatbot_id: i32,
     precision: Option<f32>,
     recall: Option<f32>,
@@ -147,8 +149,8 @@ fn build_snapshot(rows: Vec<RawRow>, volume_rows: Vec<VolumeRawRow>, ignored_use
 
     // Aggregate accumulators
     let mut repo_contributors: HashMap<u32, HashSet<u32>> = HashMap::new();
-    // (repo_name_idx, author_idx, chatbot_idx) -> count
-    let mut author_repo_counts: HashMap<(u32, u32, u8), u32> = HashMap::new();
+    // (repo_name_idx, author_idx, chatbot_idx) -> list of pr_ids
+    let mut author_repo_prs: HashMap<(u32, u32, u8), Vec<i64>> = HashMap::new();
 
     for row in &rows {
         // Chatbot lookup
@@ -193,7 +195,7 @@ fn build_snapshot(rows: Vec<RawRow>, volume_rows: Vec<VolumeRawRow>, ignored_use
                 let len = author_map.len() as u32;
                 let idx = *author_map.entry(author_lower).or_insert(len);
                 repo_contributors.entry(repo_name_idx).or_default().insert(idx);
-                *author_repo_counts.entry((repo_name_idx, idx, chatbot_idx)).or_default() += 1;
+                author_repo_prs.entry((repo_name_idx, idx, chatbot_idx)).or_default().push(row.pr_id);
                 idx
             }
             None => u32::MAX,
@@ -203,6 +205,7 @@ fn build_snapshot(rows: Vec<RawRow>, volume_rows: Vec<VolumeRawRow>, ignored_use
             parse_engagement_signals(row.engagement_signals.as_deref());
 
         let record = PrRecord {
+            pr_id: row.pr_id,
             chatbot_idx,
             bot_reviewed_at: row.bot_reviewed_at,
             precision: row.precision,
@@ -286,7 +289,7 @@ fn build_snapshot(rows: Vec<RawRow>, volume_rows: Vec<VolumeRawRow>, ignored_use
         languages,
         volumes,
         repo_contributor_counts,
-        author_repo_counts,
+        author_repo_prs,
     })
 }
 

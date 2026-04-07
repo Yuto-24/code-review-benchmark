@@ -84,6 +84,7 @@ impl Severity {
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct PrRecord {
+    pub pr_id: i64,
     pub chatbot_idx: u8,
     pub bot_reviewed_at: Option<DateTime<Utc>>,
     pub precision: Option<f32>,
@@ -135,8 +136,8 @@ pub struct Snapshot {
     pub volumes: BTreeMap<NaiveDate, Vec<VolumeRecord>>,
     /// repo_name_idx -> number of unique PR authors in that repo
     pub repo_contributor_counts: HashMap<u32, u32>,
-    /// (repo_name_idx, author_idx, chatbot_idx) -> PR count
-    pub author_repo_counts: HashMap<(u32, u32, u8), u32>,
+    /// (repo_name_idx, author_idx, chatbot_idx) -> list of pr_ids for random sampling
+    pub author_repo_prs: HashMap<(u32, u32, u8), Vec<i64>>,
 }
 
 // ---------------------------------------------------------------------------
