@@ -154,6 +154,52 @@ def main() -> None:
                     row += f" {'—':>8}"
             print(row)
 
+        # Precision comparison
+        print(f"\n  {'Bot':<35}", end="")
+        for name, _ in FILTER_CONFIGS:
+            if name in results:
+                print(f" {name[:8]:>8}", end="")
+        print(" (Precision)")
+        print(f"  {'-'*35}" + "".join(f" {'-'*8}" for name, _ in FILTER_CONFIGS if name in results))
+
+        for bot in bot_names:
+            row = f"  {bot:<35}"
+            for name, _ in FILTER_CONFIGS:
+                if name not in results:
+                    continue
+                bot_row = next(
+                    (r for r in results[name] if r["chatbot"] == bot),
+                    None,
+                )
+                if bot_row and bot_row.get("precision") is not None and bot_row.get("scored_prs", 0) > 0:
+                    row += f" {bot_row['precision']:.3f}  "
+                else:
+                    row += f" {'—':>8}"
+            print(row)
+
+        # Recall comparison
+        print(f"\n  {'Bot':<35}", end="")
+        for name, _ in FILTER_CONFIGS:
+            if name in results:
+                print(f" {name[:8]:>8}", end="")
+        print(" (Recall)")
+        print(f"  {'-'*35}" + "".join(f" {'-'*8}" for name, _ in FILTER_CONFIGS if name in results))
+
+        for bot in bot_names:
+            row = f"  {bot:<35}"
+            for name, _ in FILTER_CONFIGS:
+                if name not in results:
+                    continue
+                bot_row = next(
+                    (r for r in results[name] if r["chatbot"] == bot),
+                    None,
+                )
+                if bot_row and bot_row.get("recall") is not None and bot_row.get("scored_prs", 0) > 0:
+                    row += f" {bot_row['recall']:.3f}  "
+                else:
+                    row += f" {'—':>8}"
+            print(row)
+
     if args.output:
         with open(args.output, "w") as f:
             json.dump(results, f, indent=2)

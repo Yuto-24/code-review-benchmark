@@ -14,19 +14,28 @@ from collections import defaultdict
 from typing import Any
 
 
-def _avg_f1(scores: list[tuple[float, float]]) -> float | None:
+Scores = list[tuple[float, float]]
+
+
+def _avg_prf(scores: Scores) -> tuple[float, float, float] | None:
     if not scores:
         return None
     avg_p = sum(p for p, _ in scores) / len(scores)
     avg_r = sum(r for _, r in scores) / len(scores)
-    return 2 * avg_p * avg_r / (avg_p + avg_r) if (avg_p + avg_r) > 0 else 0
+    f1 = 2 * avg_p * avg_r / (avg_p + avg_r) if (avg_p + avg_r) > 0 else 0.0
+    return avg_p, avg_r, f1
 
 
-def _f1_str(scores: list[tuple[float, float]], min_n: int = 20) -> str:
+def _metric_str(scores: Scores, metric: str = "f1", min_n: int = 20) -> str:
+    """Format a single metric value. metric is 'f1', 'p', or 'r'."""
     if len(scores) < min_n:
         return f"  —({len(scores):>3})"
-    f1 = _avg_f1(scores)
-    return f"{f1:.3f}({len(scores):>3})" if f1 is not None else "  —"
+    prf = _avg_prf(scores)
+    if prf is None:
+        return "  —"
+    p, r, f1 = prf
+    val = {"f1": f1, "p": p, "r": r}[metric]
+    return f"{val:.3f}({len(scores):>3})"
 
 
 def _diff_bucket(d: int | None) -> str:
@@ -72,7 +81,6 @@ async def main() -> None:
 
     print(f"Loaded {len(rows)} scored rows\n")
 
-    Scores = list[tuple[float, float]]
     BotStrat = dict[str, dict[str, Scores]]
 
     bot_strats: dict[str, BotStrat] = defaultdict(lambda: {
@@ -129,83 +137,53 @@ async def main() -> None:
     # Top languages by count
     top_langs = [l for l, _ in sorted(lang_counts.items(), key=lambda x: x[1], reverse=True)[:8]]
 
-    # ---- PR SIZE ----
+    def _print_dimension_tables(
+        title: str,
+        buckets: list[str],
+        dim_key: str,
+        include_all: bool = False,
+    ) -> None:
+        """Print F1, Precision, and Recall tables for a stratification dimension."""
+        for metric, label in [("f1", "F1"), ("p", "PRECISION"), ("r", "RECALL")]:
+            print(f"\n{'='*100}")
+            print(f"  {label} BY {title}  — format: val(n_scored), min 20 PRs")
+            print("=" * 100)
+            header = f"  {'Bot':<30}"
+            for b in buckets:
+                header += f" {b[:10]:>12}"
+            if include_all:
+                header += f" {'ALL':>12}"
+            print(header)
+            sep = f"  {'-'*30}" + "".join(f" {'-'*12}" for _ in buckets)
+            if include_all:
+                sep += f" {'-'*12}"
+            print(sep)
+
+            for bot in top_bots:
+                strat = bot_strats[bot]
+                line = f"  {bot:<30}"
+                all_scores: Scores = []
+                for b in buckets:
+                    scores = strat[dim_key].get(b, [])
+                    if include_all:
+                        all_scores.extend(scores)
+                    line += f" {_metric_str(scores, metric):>12}"
+                if include_all:
+                    line += f" {_metric_str(all_scores, metric, min_n=1):>12}"
+                print(line)
+
     size_buckets = ["1-50", "51-200", "201-500", "501-1k", "1k+"]
-    print("=" * 100)
-    print("  F1 BY PR SIZE (diff lines)  — format: F1(n_scored), min 20 PRs")
-    print("=" * 100)
-    header = f"  {'Bot':<30}"
-    for b in size_buckets:
-        header += f" {b:>12}"
-    header += f" {'ALL':>12}"
-    print(header)
-    print(f"  {'-'*30}" + "".join(f" {'-'*12}" for _ in size_buckets) + f" {'-'*12}")
+    _print_dimension_tables("PR SIZE (diff lines)", size_buckets, "size", include_all=True)
 
-    for bot in top_bots:
-        strat = bot_strats[bot]
-        line = f"  {bot:<30}"
-        all_scores: Scores = []
-        for b in size_buckets:
-            scores = strat["size"].get(b, [])
-            all_scores.extend(scores)
-            line += f" {_f1_str(scores):>12}"
-        line += f" {_f1_str(all_scores, 1):>12}"
-        print(line)
-
-    # ---- SEVERITY ----
     sev_buckets = ["low", "medium", "high", "critical"]
-    print(f"\n{'='*100}")
-    print("  F1 BY SEVERITY  — format: F1(n_scored), min 20 PRs")
-    print("=" * 100)
-    header = f"  {'Bot':<30}"
-    for b in sev_buckets:
-        header += f" {b:>12}"
-    print(header)
-    print(f"  {'-'*30}" + "".join(f" {'-'*12}" for _ in sev_buckets))
+    _print_dimension_tables("SEVERITY", sev_buckets, "severity")
 
-    for bot in top_bots:
-        strat = bot_strats[bot]
-        line = f"  {bot:<30}"
-        for b in sev_buckets:
-            line += f" {_f1_str(strat['severity'].get(b, [])):>12}"
-        print(line)
+    _print_dimension_tables("LANGUAGE (top 8)", top_langs, "language")
 
-    # ---- LANGUAGE ----
-    print(f"\n{'='*100}")
-    print(f"  F1 BY LANGUAGE (top {len(top_langs)})  — format: F1(n_scored), min 20 PRs")
-    print("=" * 100)
-    header = f"  {'Bot':<30}"
-    for lang in top_langs:
-        header += f" {lang[:10]:>12}"
-    print(header)
-    print(f"  {'-'*30}" + "".join(f" {'-'*12}" for _ in top_langs))
-
-    for bot in top_bots:
-        strat = bot_strats[bot]
-        line = f"  {bot:<30}"
-        for lang in top_langs:
-            line += f" {_f1_str(strat['language'].get(lang, [])):>12}"
-        print(line)
-
-    # ---- DOMAIN ----
     domain_buckets = ["backend", "frontend", "infra", "fullstack"]
-    print(f"\n{'='*100}")
-    print("  F1 BY DOMAIN  — format: F1(n_scored), min 20 PRs")
-    print("=" * 100)
-    header = f"  {'Bot':<30}"
-    for b in domain_buckets:
-        header += f" {b:>12}"
-    print(header)
-    print(f"  {'-'*30}" + "".join(f" {'-'*12}" for _ in domain_buckets))
+    _print_dimension_tables("DOMAIN", domain_buckets, "domain")
 
-    for bot in top_bots:
-        strat = bot_strats[bot]
-        line = f"  {bot:<30}"
-        for b in domain_buckets:
-            line += f" {_f1_str(strat['domain'].get(b, [])):>12}"
-        print(line)
-
-    # ---- ALL BOTS ACROSS FILTER TIERS (full table) ----
+    # ---- ALL BOTS OVERALL ----
     print(f"\n{'='*100}")
     print(f"  ALL {len(sorted_bots)} BOTS — OVERALL F1 + SCORED PRs")
     print("=" * 100)
@@ -217,9 +195,9 @@ async def main() -> None:
             all_scores.extend(bucket_scores)
         if not all_scores:
             continue
-        avg_p = sum(p for p, _ in all_scores) / len(all_scores)
-        avg_r = sum(r for _, r in all_scores) / len(all_scores)
-        f1 = 2 * avg_p * avg_r / (avg_p + avg_r) if (avg_p + avg_r) > 0 else 0
+        prf = _avg_prf(all_scores)
+        assert prf is not None
+        avg_p, avg_r, f1 = prf
         print(f"  {bot:<35} {len(all_scores):>8} {f1:>8.3f} {avg_p:>8.3f} {avg_r:>8.3f}")
 
 
