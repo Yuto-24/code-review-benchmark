@@ -71,7 +71,7 @@ pub async fn load_from_postgres(database_url: &str) -> anyhow::Result<Snapshot> 
 
 #[derive(sqlx::FromRow)]
 struct RawRow {
-    pr_id: i64,
+    pr_id: i32,
     chatbot_id: i32,
     precision: Option<f32>,
     recall: Option<f32>,
@@ -195,7 +195,7 @@ fn build_snapshot(rows: Vec<RawRow>, volume_rows: Vec<VolumeRawRow>, ignored_use
                 let len = author_map.len() as u32;
                 let idx = *author_map.entry(author_lower).or_insert(len);
                 repo_contributors.entry(repo_name_idx).or_default().insert(idx);
-                author_repo_prs.entry((repo_name_idx, idx, chatbot_idx)).or_default().push(row.pr_id);
+                author_repo_prs.entry((repo_name_idx, idx, chatbot_idx)).or_default().push(row.pr_id as i64);
                 idx
             }
             None => u32::MAX,
@@ -205,7 +205,7 @@ fn build_snapshot(rows: Vec<RawRow>, volume_rows: Vec<VolumeRawRow>, ignored_use
             parse_engagement_signals(row.engagement_signals.as_deref());
 
         let record = PrRecord {
-            pr_id: row.pr_id,
+            pr_id: row.pr_id as i64,
             chatbot_idx,
             bot_reviewed_at: row.bot_reviewed_at,
             precision: row.precision,
