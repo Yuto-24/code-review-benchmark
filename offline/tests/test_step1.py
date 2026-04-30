@@ -90,7 +90,7 @@ def test_fetch_repo_data(monkeypatch):
     def stub_pr_metadata(_org, _repo, pr):
         return {"title": f"PR {pr}", "url": "https://github.com/org/repo/pull/1"}
 
-    def stub_review_comments(_org, _repo, _pr, tool=""):
+    def stub_review_comments(_org, _repo, _pr, tool=""):  # noqa: ARG001
         return [{"path": "file.py", "line": 5, "body": "content", "created_at": "now"}]
 
     monkeypatch.setattr(step1, "fetch_pr_metadata", stub_pr_metadata)
