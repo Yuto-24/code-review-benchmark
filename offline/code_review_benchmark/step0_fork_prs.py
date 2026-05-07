@@ -269,6 +269,8 @@ def _load_pr_urls_from_file(path: str) -> list[str]:
 
 def main():
     """CLI entrypoint: process a single PR or a batch file."""
+    load_dotenv(".env", verbose=True)
+
     parser = argparse.ArgumentParser(description="Clone PR(s) to your org for AI review")
     parser.add_argument("pr_url", nargs="?", help="GitHub PR URL (for single run)")
     parser.add_argument("--file", help="Path to golden comments JSON to batch process")
@@ -278,9 +280,8 @@ def main():
         "--token", default=os.environ.get("GITHUB_TOKEN"), help="GitHub token"
     )
     args = parser.parse_args()
-    load_dotenv(".env", verbose=True)
 
-    if not os.environ.get("GITHUB_TOKEN") and not args.token:
+    if not args.token:
         print("Error: Set GITHUB_TOKEN or use --token")
         sys.exit(1)
 
