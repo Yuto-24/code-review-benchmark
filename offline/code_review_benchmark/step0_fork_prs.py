@@ -28,6 +28,8 @@ import subprocess
 import sys
 import tempfile
 import time
+from dotenv import load_dotenv
+
 
 import requests
 
@@ -277,8 +279,9 @@ def main():
         "--token", default=os.environ.get("GITHUB_TOKEN"), help="GitHub token"
     )
     args = parser.parse_args()
+    load_dotenv(".env", verbose=True)
 
-    if not args.token:
+    if not os.environ.get("GITHUB_TOKEN") and not args.token:
         print("Error: Set GITHUB_TOKEN or use --token")
         sys.exit(1)
 
