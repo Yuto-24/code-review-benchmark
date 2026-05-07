@@ -64,6 +64,15 @@ class RateLimitExhaustedError(Exception):
         super().__init__(f"Rate limit exhausted, resets at {reset_at}")
 
 
+class TokenInvalidError(Exception):
+    """Raised when a GitHub token is rejected with 401 — invalid, expired, or revoked."""
+
+
+class AllTokensInvalidError(Exception):
+    """Raised when every token in the pool has been permanently rejected.
+    Never causes a PR to be marked as error — the enrichment loop aborts instead."""
+
+
 class GitHubEnrichClient:
     """Async GitHub API client with rate limiting and retries — adapted from gh_enrich.py."""
 
@@ -116,6 +125,8 @@ class GitHubEnrichClient:
             for attempt in range(4):
                 try:
                     resp = await client.get(url, params=params)
+                    if resp.status_code == 401:
+                        raise TokenInvalidError(f"Token rejected (401) for {url}: {resp.text[:200]}")
                     if resp.status_code == 403:
                         if self._is_rate_limited(resp):
                             reset_time = resp.headers.get("X-RateLimit-Reset")
@@ -124,7 +135,8 @@ class GitHubEnrichClient:
                         logger.warning(f"403 Forbidden for {url} — skipping")
                         return None
                     await self._check_rate_limit(resp)
-                    if resp.status_code in (404, 422):
+                    # 404/410 Gone/422/451 Legal Reasons — content unavailable, skip
+                    if resp.status_code in (404, 410, 422, 451):
                         logger.warning(f"{resp.status_code} for {url} — skipping")
                         return None
                     if resp.status_code == 301:
@@ -141,7 +153,7 @@ class GitHubEnrichClient:
                         continue
                     resp.raise_for_status()
                     return resp
-                except RateLimitExhaustedError:
+                except (RateLimitExhaustedError, TokenInvalidError):
                     raise
                 except httpx.HTTPError as e:
                     if attempt < 3:
@@ -180,6 +192,8 @@ class GitHubEnrichClient:
                         GRAPHQL_URL,
                         json={"query": query, "variables": variables},
                     )
+                    if resp.status_code == 401:
+                        raise TokenInvalidError(f"Token rejected (401) on GraphQL: {resp.text[:200]}")
                     if resp.status_code == 403:
                         if self._is_rate_limited(resp):
                             reset_time = resp.headers.get("X-RateLimit-Reset")
@@ -197,7 +211,7 @@ class GitHubEnrichClient:
                             return data["data"]
                         return None
                     return data.get("data")
-                except RateLimitExhaustedError:
+                except (RateLimitExhaustedError, TokenInvalidError):
                     raise
                 except httpx.HTTPError as e:
                     if attempt < 3:
@@ -346,7 +360,8 @@ class TokenPool:
 
     def __init__(self, tokens: list[str], concurrency: int = 10):
         self._entries: list[dict] = [
-            {"client": GitHubEnrichClient(t, concurrency), "reset_at": 0, "active": 0} for t in tokens
+            {"client": GitHubEnrichClient(t, concurrency), "reset_at": 0, "active": 0, "invalid": False}
+            for t in tokens
         ]
 
     @property
@@ -356,12 +371,16 @@ class TokenPool:
     def get(self) -> GitHubEnrichClient | None:
         """Return the least-loaded non-rate-limited client, or None if all exhausted."""
         now = time.time()
-        available = [e for e in self._entries if e["reset_at"] <= now]
+        available = [e for e in self._entries if not e["invalid"] and e["reset_at"] <= now]
         if not available:
             return None
         best = min(available, key=lambda e: e["active"])
         best["active"] += 1
         return best["client"]
+
+    def all_invalid(self) -> bool:
+        """True when every token has been permanently rejected — pipeline cannot continue."""
+        return all(e["invalid"] for e in self._entries)
 
     def release(self, client: GitHubEnrichClient) -> None:
         """Decrement active count when a worker finishes using a client."""
@@ -377,14 +396,27 @@ class TokenPool:
                 e["active"] = 0
                 break
 
+    def mark_invalid(self, client: GitHubEnrichClient) -> None:
+        """Permanently remove a token from rotation (bad credentials, revoked, etc.)."""
+        for e in self._entries:
+            if e["client"] is client:
+                e["invalid"] = True
+                e["active"] = 0
+                logger.error(f"Token permanently disabled — {self.status_summary()}")
+                break
+
     def earliest_reset(self) -> float:
-        return min(e["reset_at"] for e in self._entries)
+        """Return the earliest reset time among rate-limited (non-invalid) tokens."""
+        limited = [e["reset_at"] for e in self._entries if not e["invalid"]]
+        return min(limited) if limited else float("inf")
 
     def status_summary(self) -> str:
         now = time.time()
         parts = []
         for i, e in enumerate(self._entries):
-            if e["reset_at"] > now:
+            if e["invalid"]:
+                parts.append(f"T{i}:invalid")
+            elif e["reset_at"] > now:
                 parts.append(f"T{i}:limited({int(e['reset_at'] - now)}s)")
             else:
                 parts.append(f"T{i}:active={e['active']}")
@@ -534,6 +566,17 @@ async def enrich_loop(
     async def _worker(worker_id: int) -> None:
         nonlocal enriched_count, error_count
         while True:
+            # Stop early if the pool is dead or another worker requested shutdown —
+            # avoids locking more PRs we can't actually process.
+            if stop_event.is_set() or pool.all_invalid():
+                # Drain remaining items (including sentinels) so queue.join() unblocks
+                try:
+                    pr_row = queue.get_nowait()
+                    queue.task_done()
+                    continue
+                except asyncio.QueueEmpty:
+                    break
+
             pr_row = await queue.get()
             if pr_row is None:
                 queue.task_done()
@@ -550,6 +593,8 @@ async def enrich_loop(
                 gh = None
                 try:
                     while True:
+                        if pool.all_invalid():
+                            raise AllTokensInvalidError("All GitHub tokens are invalid — aborting enrichment")
                         gh = pool.get()
                         if gh is None:
                             wait = max(0, pool.earliest_reset() - time.time()) + 5
@@ -560,6 +605,11 @@ async def enrich_loop(
                             await enrich_single_pr(gh, repo_obj, pr_row, cfg)
                             enriched_count += 1
                             break
+                        except TokenInvalidError:
+                            pool.mark_invalid(gh)
+                            gh = None
+                            logger.warning(f"Worker {worker_id}: token invalid, rotating ({pool.status_summary()})")
+                            continue
                         except RateLimitExhaustedError as e:
                             pool.mark_limited(gh, e.reset_at)
                             logger.info(f"Worker {worker_id}: token rate-limited, rotating ({pool.status_summary()})")
@@ -568,6 +618,14 @@ async def enrich_loop(
                 finally:
                     if gh is not None:
                         pool.release(gh)
+            except AllTokensInvalidError:
+                # Don't mark the PR as error — release the lock so it's picked up
+                # immediately on the next run with valid tokens (instead of waiting
+                # for the stale-lock timeout). Signal all workers to stop.
+                logger.critical(f"Worker {worker_id}: all tokens invalid, stopping enrichment loop")
+                with contextlib.suppress(Exception):
+                    await repo_obj.unlock_pr(pr_id)
+                stop_event.set()
             except Exception as e:
                 logger.error(f"Worker {worker_id}: error enriching {pr_label}: {e}")
                 await repo_obj.mark_error(pr_id, str(e))
