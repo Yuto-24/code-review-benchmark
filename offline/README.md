@@ -4,19 +4,19 @@ Open replication of the code review benchmark used by companies like [Augment](h
 
 ## Evaluated tools
 
-| Tool | Type |
-|---|---|
-| [Augment](https://www.augmentcode.com/) | AI code review |
-| [Claude Code](https://claude.ai) | AI assistant |
-| [CodeRabbit](https://www.coderabbit.ai/) | AI code review |
-| [Codex](https://openai.com/codex) | AI assistant |
-| [Cursor Bugbot](https://cursor.com) | AI code review |
-| [Gemini](https://gemini.google.com/) | AI assistant |
+| Tool                                                  | Type           |
+| ----------------------------------------------------- | -------------- |
+| [Augment](https://www.augmentcode.com/)               | AI code review |
+| [Claude Code](https://claude.ai)                      | AI assistant   |
+| [CodeRabbit](https://www.coderabbit.ai/)              | AI code review |
+| [Codex](https://openai.com/codex)                     | AI assistant   |
+| [Cursor Bugbot](https://cursor.com)                   | AI code review |
+| [Gemini](https://gemini.google.com/)                  | AI assistant   |
 | [GitHub Copilot](https://github.com/features/copilot) | AI code review |
-| [Graphite](https://graphite.dev/) | AI code review |
-| [Greptile](https://www.greptile.com/) | AI code review |
-| [Propel](https://propelauth.com/) | AI code review |
-| [Qodo](https://www.qodo.ai/) | AI code review |
+| [Graphite](https://graphite.dev/)                     | AI code review |
+| [Greptile](https://www.greptile.com/)                 | AI code review |
+| [Propel](https://propelauth.com/)                     | AI code review |
+| [Qodo](https://www.qodo.ai/)                          | AI code review |
 
 Adding a new tool requires forking the benchmark PRs and collecting the tool's reviews — see Steps 0 and 1 below.
 
@@ -49,7 +49,7 @@ Results are stored per judge model so you can compare how different judges score
 
 ## Requirements
 
-- Write access to  GitHub org
+- Write access to GitHub org
 - GitHub CLI
 - uv
 
@@ -59,17 +59,17 @@ Results are stored per judge model so you can compare how different judges score
 
 1. Install dependencies:
 
-    ```bash
-    cd offline
-    uv sync
-    ```
+   ```bash
+   cd offline
+   uv sync
+   ```
 
 2. Create `.env` file (see `.env.example`):
 
-    ```bash
-    cp .env.example .env
-    # fill in your tokens
-    ```
+   ```bash
+   cp .env.example .env
+   # fill in your tokens
+   ```
 
 ## Tests
 
@@ -108,16 +108,16 @@ Aggregate PR reviews from benchmark repos with golden comments:
 
 ```bash
 # Full run (incremental - skips already downloaded)
-uv run python -m code_review_benchmark.step1_download_prs --output results/benchmark_data.json
+uv run python -m code_review_benchmark.step1_download_prs --output results/benchmark_data.json --org ${your_organization}
 
 # Test mode: 1 PR per tool
-uv run python -m code_review_benchmark.step1_download_prs --output results/benchmark_data.json --test
+uv run python -m code_review_benchmark.step1_download_prs --output results/benchmark_data.json --test --org ${your_organization}
 
 # Force refetch all reviews
-uv run python -m code_review_benchmark.step1_download_prs --output results/benchmark_data.json --force
+uv run python -m code_review_benchmark.step1_download_prs --output results/benchmark_data.json --force --org ${your_organization}
 
 # Force refetch for a specific tool
-uv run python -m code_review_benchmark.step1_download_prs --output results/benchmark_data.json --force --tool copilot
+uv run python -m code_review_benchmark.step1_download_prs --output results/benchmark_data.json --force --tool copilot --org ${your_organization}
 ```
 
 **Output:** `results/benchmark_data.json`
@@ -139,7 +139,7 @@ uv run python -m code_review_benchmark.step2_extract_comments --tool claude --li
 
 Line-specific comments become direct candidates. General comments are sent to the LLM to extract individual issues.
 
-**Output:** Updates `results/benchmark_data.json` with `candidates` field per review.
+**Output:** `results/{model}/candidates.json`
 
 ### 2.5. Deduplicate candidates (recommended)
 
@@ -269,15 +269,13 @@ Source files: `sentry.json`, `grafana.json`, `keycloak.json`, `discourse.json`, 
     "pr_title": "...",
     "original_url": "...",
     "source_repo": "sentry",
-    "golden_comments": [
-      {"comment": "...", "severity": "High"}
-    ],
+    "golden_comments": [{ "comment": "...", "severity": "High" }],
     "reviews": [
       {
         "tool": "claude",
         "pr_url": "https://github.com/code-review-benchmark/...",
         "review_comments": [
-          {"path": "...", "line": 42, "body": "...", "created_at": "..."}
+          { "path": "...", "line": 42, "body": "...", "created_at": "..." }
         ],
         "candidates": ["issue description 1", "issue description 2"]
       }
